@@ -1,0 +1,28 @@
+# Julia compiled cache
+.julia/
+
+# Build artifacts
+*.ji
+
+# System images
+*.so
+*.dylib
+*.dll
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Temporary files
+*.tmp
+*.bak
+
