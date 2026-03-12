@@ -16,10 +16,13 @@ function plot_advanced_digraph(G, coloring::Vector{Int};
     # labels
     node_labels = String[]
     for v in 1:nv(G)
-        d_out = length(outneighbors(G, v))
-        limit = floor(Int, d_out / 2)
+        # Collect once to avoid double-evaluation of the lazy outneighbors view
+        out_nbrs = collect(outneighbors(G, v))
+        d_out = length(out_nbrs)
+        # Use fld (floor integer division) to exactly match the MILP solver constraint
+        limit = fld(d_out, 2)
         c_v = coloring[v]
-        conflicts = count(u -> coloring[u] == c_v, outneighbors(G, v))
+        conflicts = count(u -> coloring[u] == c_v, out_nbrs)
         
         # set format "ID: Conflicts/Limit"
         push!(node_labels, "$v\n$conflicts/$limit")
