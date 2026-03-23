@@ -15,3 +15,7 @@
 3. From the repository root, run:
    `./setup.sh` (optionally `./setup.sh "KernelName"`).
 4. Start Jupyter with `jupyter notebook` and select the `MajorityColoring` kernel (or your custom name).
+
+## Python setup (charts)
+1. Init & activate virtual env: `python3 -m venv .venv && source .venv/bin/activate`
+2. Install requirements: `pip install -r requirements.txt`

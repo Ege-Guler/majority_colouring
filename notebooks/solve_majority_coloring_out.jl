@@ -39,11 +39,12 @@ function solve_majority_coloring_out(
         if dv == 0
             continue
         end
-        bound = fld(dv, 2)       # floor(d⁺(v)/2)
+        bound     = fld(dv, 2)   # floor(d⁺(v)/2) — max same-color out-neighbors
+        big_m     = cld(dv, 2)   # ceil(d⁺(v)/2)  — tightest big-M (floor+ceil = dv)
 
         for c in 1:K
             @constraint(model,
-                sum(x[u,c] for u in Nv) <= bound + dv * (1 - x[v,c])
+                sum(x[u,c] for u in Nv) <= bound + big_m * (1 - x[v,c])
             )
         end
     end
