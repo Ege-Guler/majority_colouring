@@ -1,5 +1,8 @@
 # Majority Colouring
 
+## 5 vertices graph results
+https://github.com/Ege-Guler/majority_colouring/blob/main/notebooks/graph_analysis.ipynb
+
 ## Windows setup
 1. Install Julia (e.g., via juliaup) and ensure `julia` is on your PATH.
 2. (Optional) Install Jupyter: `pip install notebook` (or `pip install jupyterlab`).
