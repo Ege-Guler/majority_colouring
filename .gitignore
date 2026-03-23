@@ -29,3 +29,5 @@ Thumbs.db
 Manifest.toml
 
 notebooks/visualizations/
+
+.env
