@@ -31,3 +31,5 @@ Manifest.toml
 notebooks/visualizations/
 
 .env
+
+.venv/
