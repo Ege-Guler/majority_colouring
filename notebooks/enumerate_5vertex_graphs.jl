@@ -137,8 +137,8 @@ mkpath(vis_dir)
 empty!(_iso_seen)
 
 # --- Main enumeration ---
-total       = 2^20   # 1_048_576
-MAX_IMAGES  = 200
+total       = 2^25 # TODO: run again with updated total, no need to iterate graphs with loops
+MAX_IMAGES  = 200000
 
 counts      = Dict{Int,Int}()
 saved_count = Ref(0)
@@ -163,6 +163,7 @@ open(output_csv, "w") do f
         ne_count = ne(G)
 
         is_weakly_connected(G) || continue
+        is_cyclic(G) && continue # Skip graphs with loops
 
         _, _, y_val, coloring = solve_majority_coloring_out(G, true, true, true)
 
@@ -196,12 +197,15 @@ for k in sort(collect(keys(counts)))
 end
 println("Total graphs processed: $(sum(values(counts)))")
 
-# run on all the graphs <= 5 vertices
-
-# check isomorphic graphs -> check for libraries that can do this efficiently for directed graphs (e.g. nauty/traces, bliss, graph.julia)
-#
-# cyclic graphs, isomorphic graphs, hamiltonian cycles, density(#edges), connectivity number, stability number, clique number
+# --- TODO list ---
 #
 # 10min -> 100K
 # for 33M -> 3300min ~ 55hours -> maybe can be parallelized across multiple machines? (e.g. split by mask ranges)
 #
+# explore graphs that are isomorphic together
+#
+# add function based timing to record how long each step takes (isomorphism especially)
+#
+# check girth, diameter, feedback vertex set number (cycle transversal number)
+#
+# try larger graphs? 
