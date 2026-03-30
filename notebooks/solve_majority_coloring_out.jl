@@ -16,15 +16,18 @@ function solve_majority_coloring_out(
     G::SimpleDiGraph,
     strengthen_y::Bool = true,
     symmetry_break::Bool = true,
-    silent::Bool = true
+    silent::Bool = true,
+    use_env=true
 )
     n = nv(G)
     K = 4
 
-    model = Model(HiGHS.Optimizer)
-    if silent
-        set_silent(model)
-    end
+    model = Model(() -> Gurobi.Optimizer(GRB_ENV))
+    
+    # SILENCE OUTPUT: Mandatory for large loops
+    set_optimizer_attribute(model, "OutputFlag", 0)
+
+    set_optimizer_attribute(model, "Threads", 1)
 
     @variable(model, x[1:n, 1:K], Bin)
     @variable(model, y[1:K], Bin)
