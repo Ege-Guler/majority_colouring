@@ -33,3 +33,7 @@ notebooks/visualizations/
 .env
 
 .venv/
+
+results_4vertex.csv
+results_5vertex.csv
+results_6vertex.csv
