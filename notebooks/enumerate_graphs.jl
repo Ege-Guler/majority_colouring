@@ -24,10 +24,11 @@ using Base.Threads
 using Combinatorics
 
 # --- Modular Vertices Setup ---
-const VERTICES = parse(Int, get(ARGS, 1, "5"))
-const ALL_EDGES = [(i, j) for i in 1:VERTICES for j in 1:VERTICES if i != j]
-const NUM_EDGES = length(ALL_EDGES)
-const TOTAL_MASKS = 2^NUM_EDGES
+const VERTICES           = parse(Int, get(ARGS, 1, "5"))
+const ALL_EDGES          = [(i, j) for i in 1:VERTICES for j in 1:VERTICES if i != j]
+const NUM_EDGES          = length(ALL_EDGES)
+const TOTAL_MASKS        = 2^NUM_EDGES
+const FILTER_ODD_CYCLES  = "--filter-odd-cycles" in ARGS
 
 include("solve_majority_coloring_out.jl")
 
@@ -85,6 +86,19 @@ function compute_clique_number(G::SimpleDiGraph)
         end
     end
     return best
+end
+
+# Returns true iff G contains at least one directed cycle of odd length.
+# Proof of correctness: a strongly connected digraph has a directed odd cycle iff
+# its underlying undirected graph is not bipartite (period-2 ↔ bipartite ↔ all cycles even).
+# We check each non-trivial SCC independently.
+function has_directed_odd_cycle(G::SimpleDiGraph)::Bool
+    for scc in strongly_connected_components(G)
+        length(scc) < 2 && continue
+        H, _ = induced_subgraph(G, scc)
+        !is_bipartite(SimpleGraph(H)) && return true
+    end
+    return false
 end
 
 function has_hamiltonian_path(G::SimpleDiGraph)
@@ -161,12 +175,14 @@ end
 
 # --- Setup output paths ---
 notebooks_dir = @__DIR__
-output_csv    = joinpath(notebooks_dir, "results_$(VERTICES)vertex.csv")
+output_csv    = FILTER_ODD_CYCLES ?
+    joinpath(notebooks_dir, "results_$(VERTICES)vertex_odd_only.csv") :
+    joinpath(notebooks_dir, "results_$(VERTICES)vertex.csv")
 vis_dir       = joinpath(notebooks_dir, "visualizations")
 mkpath(vis_dir)
 
 # --- Timing & Statistics ---
-const timer_keys = ["isomorphism_check", "solve_majority", "property_computation", "mask_to_graph"]
+const timer_keys = ["isomorphism_check", "solve_majority", "property_computation", "mask_to_graph", "odd_cycle_check"]
 timers = Dict(k => Atomic{Float64}(0.0) for k in timer_keys)
 counts = Dict{Int, Int}()
 
@@ -177,8 +193,11 @@ results_chan    = Channel{Any}(1000)
 # --- Implementation ---
 
 println("Enumerating all $TOTAL_MASKS directed graphs on $VERTICES vertices...")
-println("Threads (Julia): $(nthreads())")
-println("CSV Output:      $output_csv")
+println("Threads (Julia):    $(nthreads())")
+println("CSV Output:         $output_csv")
+println("Filter odd cycles:  $FILTER_ODD_CYCLES")
+FILTER_ODD_CYCLES && println("  (graphs with no directed odd cycle are provably majority 2-colourable")
+FILTER_ODD_CYCLES && println("   by Proposition 1 of arXiv:1911.01954 and will be omitted from output)")
 flush(stdout)
 
 # 1. Start Writer Task
@@ -219,22 +238,40 @@ for i in 1:nthreads()
             cached_res = get_cached_result(cmask)
             
             if cached_res !== nothing
-                chromatic, conn, stability, clique, ham_path, cyclic, wc = cached_res
+                # Cache tuple: (chromatic, conn, stability, clique, ham_path, cyclic, wc, odd_cyc)
+                chromatic, conn, stability, clique, ham_path, cyclic, wc, odd_cyc = cached_res
                 iso = true
                 if !wc
                     put!(results_chan, (mask, count_ones(mask), -1, true, false, -1, -1, -1, false))
+                    continue
+                end
+                # Skip isomorphic copies that are provably 2-colorable when filtering
+                if FILTER_ODD_CYCLES && !odd_cyc
                     continue
                 end
             else
                 iso = false
                 t_mask = @elapsed G = mask_to_graph(mask)
                 atomic_add!(timers["mask_to_graph"], t_mask)
-                
+
                 wc = is_weakly_connected(G)
                 if !wc
-                    cache_result!(cmask, (-1, -1, -1, -1, false, false, false))
+                    cache_result!(cmask, (-1, -1, -1, -1, false, false, false, false))
                     put!(results_chan, (mask, count_ones(mask), -1, false, false, -1, -1, -1, false))
                     continue
+                end
+
+                # Proposition 1 (arXiv:1911.01954): any digraph with no directed odd cycle
+                # is majority 2-colourable. Skip Gurobi entirely for these graphs.
+                if FILTER_ODD_CYCLES
+                    t_odd = @elapsed odd_cyc = has_directed_odd_cycle(G)
+                    atomic_add!(timers["odd_cycle_check"], t_odd)
+                    if !odd_cyc
+                        cache_result!(cmask, (2, -1, -1, -1, false, false, true, false))
+                        continue  # omit from CSV
+                    end
+                else
+                    odd_cyc = true  # not filtering; treat as having odd cycle
                 end
 
                 t_prop = @elapsed begin
@@ -252,7 +289,7 @@ for i in 1:nthreads()
                     retry_count = 0
                     success = false
                     y_val = nothing
-                    
+
                     while !success && retry_count < max_retries
                         try
                             _, _, y_val, _ = solve_majority_coloring_out(G, env; strengthen_y=true, symmetry_break=true)
@@ -272,7 +309,7 @@ for i in 1:nthreads()
                 atomic_add!(timers["solve_majority"], t_solve)
                 chromatic = y_val === nothing ? -1 : sum(y_val)
 
-                cache_result!(cmask, (chromatic, conn, stability, clique, ham_path, cyclic, true))
+                cache_result!(cmask, (chromatic, conn, stability, clique, ham_path, cyclic, true, true))
             end
 
             put!(results_chan, (mask, count_ones(mask), chromatic, iso, cyclic, conn, stability, clique, ham_path))
@@ -306,4 +343,8 @@ for k in sort(collect(keys(counts)))
     label = k == -1 ? "skipped/error" : "$k color(s)"
     println("  $label : $(counts[k]) graphs")
 end
-println("Total graphs analyzed: $total_processed")
+println("Total graphs written: $total_processed")
+if FILTER_ODD_CYCLES
+    println("\nNote: graphs without a directed odd cycle were omitted (provably 2-colourable).")
+    println("Output: $output_csv")
+end

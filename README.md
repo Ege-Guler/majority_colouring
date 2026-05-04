@@ -30,6 +30,25 @@ julia --project -t auto notebooks/enumerate_graphs.jl 5
 julia --project -t 8 notebooks/enumerate_graphs.jl 6
 ```
 
+### Flags
+
+#### `--filter-odd-cycles`
+
+By **Proposition 1 of [arXiv:1911.01954](https://arxiv.org/pdf/1911.01954)**, every directed graph that contains no directed cycle of odd length is majority 2-colourable. Passing this flag exploits that result as a pre-filter: before calling the Gurobi ILP solver, the script checks whether the graph has a directed odd cycle. If it does not, the graph is skipped entirely — it is not written to the CSV and Gurobi is never invoked for it.
+
+```bash
+# 5 vertices — filtered output
+julia --project -t auto notebooks/enumerate_graphs.jl 5 --filter-odd-cycles
+
+# 6 vertices — filtered output (recommended for the 38 GB run)
+julia --project -t 8 notebooks/enumerate_graphs.jl 6 --filter-odd-cycles
+```
+
+Output file when the flag is set: `notebooks/results_<N>vertex_odd_only.csv`
+Output file without the flag: `notebooks/results_<N>vertex.csv`
+
+From the 5-vertex results, ~98.9 % of graphs have chromatic number 2; a large share of those will be eliminated by this filter without touching Gurobi, making the 6-vertex run substantially faster.
+
 ### Feedback & Monitoring
 - **Threads:** When the script starts, it will print `Threads: X` to confirm how many CPU cores are being used.
 - **Complexity:** For $N$ vertices, the script processes $2^{N(N-1)}$ masks.
