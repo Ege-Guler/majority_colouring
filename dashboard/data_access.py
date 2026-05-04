@@ -126,16 +126,19 @@ class GraphDataset:
         row = self._con.execute(
             """
             SELECT
-              COUNT(*)                                     AS total,
-              AVG(CASE WHEN is_isomorphic       THEN 1 ELSE 0 END) AS pct_iso,
-              AVG(CASE WHEN is_cyclic           THEN 1 ELSE 0 END) AS pct_cyclic,
+              COUNT(*)                                      AS total,
+              AVG(CASE WHEN is_isomorphic        THEN 1 ELSE 0 END) AS pct_iso,
+              AVG(CASE WHEN is_cyclic            THEN 1 ELSE 0 END) AS pct_cyclic,
               AVG(CASE WHEN has_hamiltonian_path THEN 1 ELSE 0 END) AS pct_hamil,
               AVG(num_edges) AS avg_edges
             FROM graphs
             """
         ).fetchone()
+        if row is None:
+            return {"total": 0, "pct_isomorphic": 0.0, "pct_cyclic": 0.0,
+                    "pct_hamiltonian": 0.0, "avg_num_edges": 0.0}
         return {
-            "total": int(row[0]),
+            "total": int(row[0] or 0),
             "pct_isomorphic": float(row[1] or 0.0),
             "pct_cyclic": float(row[2] or 0.0),
             "pct_hamiltonian": float(row[3] or 0.0),
@@ -196,6 +199,8 @@ class GraphDataset:
 
     def column_range(self, col: str) -> tuple[int, int]:
         row = self._con.execute(f"SELECT MIN({col}), MAX({col}) FROM graphs").fetchone()
+        if row is None:
+            return 0, 0
         lo, hi = row
         return int(lo if lo is not None else 0), int(hi if hi is not None else 0)
 
@@ -230,13 +235,12 @@ class GraphDataset:
 
     def filter_count(self, filters: dict) -> int:
         where, params = self._build_where(filters)
-        sql = f"SELECT COUNT(*) FROM graphs{where}"
-        return int(self._con.execute(sql, params).fetchone()[0])
+        row = self._con.execute(f"SELECT COUNT(*) FROM graphs{where}", params).fetchone()
+        return int(row[0]) if row else 0
 
-    def filter_page(self, filters: dict, limit: int, offset: int) -> pd.DataFrame:
+    def filter_all(self, filters: dict) -> pd.DataFrame:
         where, params = self._build_where(filters)
-        sql = f"SELECT * FROM graphs{where} ORDER BY mask LIMIT ? OFFSET ?"
-        return self._con.execute(sql, params + [int(limit), int(offset)]).df()
+        return self._con.execute(f"SELECT * FROM graphs{where} ORDER BY mask", params).df()
 
     def get_by_mask(self, mask: int) -> pd.DataFrame:
         return self._con.execute(

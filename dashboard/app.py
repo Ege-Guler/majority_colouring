@@ -22,7 +22,6 @@ from data_access import (
 from visualize import render_graph
 
 NOTEBOOKS_DIR = DASHBOARD_DIR.parent / "notebooks"
-PAGE_SIZE = 50
 
 st.set_page_config(
     page_title="Majority Colouring — Graph Dashboard",
@@ -302,7 +301,6 @@ with tab_filter:
             "chromatic_number": chrom_pick or chrom_values,
             **bool_state,
         }
-        st.session_state.page = 0
 
     filters = st.session_state.filters
     match_count = ds.filter_count(filters)
@@ -311,32 +309,23 @@ with tab_filter:
     if match_count == 0:
         st.info("No graphs match these filters.")
     else:
-        max_page = max(0, (match_count - 1) // PAGE_SIZE)
-        page = st.number_input(
-            f"Page (0–{max_page})",
-            min_value=0,
-            max_value=max_page,
-            value=min(st.session_state.get("page", 0), max_page),
-            step=1,
-        )
-        st.session_state.page = int(page)
-        page_df = ds.filter_page(filters, PAGE_SIZE, int(page) * PAGE_SIZE)
+        result_df = ds.filter_all(filters)
 
         event = st.dataframe(
-            page_df,
+            result_df,
             width='stretch',
             hide_index=True,
             on_select="rerun",
             selection_mode="single-row",
-            key=f"page_table_{info.n_vertices}",
+            key=f"filter_table_{info.n_vertices}",
         )
 
         selected_mask: int | None = None
         sel = getattr(event, "selection", None)
         if sel and sel.get("rows"):
             row_idx = sel["rows"][0]
-            if 0 <= row_idx < len(page_df):
-                selected_mask = int(page_df.iloc[row_idx]["mask"])
+            if 0 <= row_idx < len(result_df):
+                selected_mask = int(result_df.iloc[row_idx]["mask"])
 
         st.divider()
         st.subheader("Visualize a graph")
