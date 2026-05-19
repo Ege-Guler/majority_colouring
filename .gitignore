@@ -29,3 +29,15 @@ Thumbs.db
 Manifest.toml
 
 notebooks/visualizations/
+
+.env
+
+.venv/
+
+*.csv
+*.parquet
+*.pyc
+*.docx
+
+scrape_colorable
+scrape_colorable_debug
