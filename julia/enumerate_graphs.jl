@@ -159,10 +159,26 @@ const NUM_SHARDS = 256
 const caches = [Dict{UInt64, Any}() for _ in 1:NUM_SHARDS]
 const cache_locks = [ReentrantLock() for _ in 1:NUM_SHARDS]
 
-function get_cached_result(cmask::UInt64)
+# Sentinel stored in the cache while a thread is computing the result.
+# Other threads that see it yield until the real result is written.
+const CACHE_PENDING = :pending
+
+# Atomically returns one of three outcomes:
+#   (:hit,     result) — already computed by another thread, use it
+#   (:claimed, nothing) — we just claimed it; caller must compute and cache_result!
+#   (:pending, nothing) — another thread is computing; caller should yield and retry
+function get_or_claim_cached_result(cmask::UInt64)
     shard_idx = (cmask % NUM_SHARDS) + 1
     lock(cache_locks[shard_idx]) do
-        return get(caches[shard_idx], cmask, nothing)
+        val = get(caches[shard_idx], cmask, nothing)
+        if val === nothing
+            caches[shard_idx][cmask] = CACHE_PENDING
+            return (:claimed, nothing)
+        elseif val === CACHE_PENDING
+            return (:pending, nothing)
+        else
+            return (:hit, val)
+        end
     end
 end
 
@@ -236,9 +252,14 @@ for i in 1:nthreads()
             t_iso = @elapsed cmask = get_canonical_mask(mask)
             atomic_add!(timers["isomorphism_check"], t_iso)
             
-            cached_res = get_cached_result(cmask)
-            
-            if cached_res !== nothing
+            local cache_status, cached_res
+            while true
+                cache_status, cached_res = get_or_claim_cached_result(cmask)
+                cache_status !== :pending && break
+                yield()
+            end
+
+            if cache_status == :hit
                 # Cache tuple: (chromatic, conn, stability, clique, ham_path, cyclic, wc, odd_cyc)
                 chromatic, conn, stability, clique, ham_path, cyclic, wc, odd_cyc = cached_res
                 iso = true
@@ -250,7 +271,7 @@ for i in 1:nthreads()
                 if FILTER_ODD_CYCLES && !odd_cyc
                     continue
                 end
-            else
+            else  # :claimed — we must compute and cache the result
                 iso = false
                 t_mask = @elapsed G = mask_to_graph(mask)
                 atomic_add!(timers["mask_to_graph"], t_mask)
