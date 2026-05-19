@@ -197,6 +197,27 @@ class GraphDataset:
             """
         ).df()
 
+    def edge_density_stats(self) -> dict:
+        """Return the global max edge count and the 80th-percentile threshold.
+
+        The p80 value is the smallest edge count x such that exactly 20% of
+        graphs have num_edges > x (i.e. the 80th percentile of num_edges).
+        """
+        row = self._con.execute(
+            """
+            SELECT
+              MAX(num_edges)                        AS max_edges,
+              approx_quantile(num_edges, 0.80)      AS p80_edges
+            FROM graphs
+            """
+        ).fetchone()
+        if row is None:
+            return {"max_edges": 0, "p80_edges": 0}
+        return {
+            "max_edges": int(row[0] if row[0] is not None else 0),
+            "p80_edges": int(row[1] if row[1] is not None else 0),
+        }
+
     def column_range(self, col: str) -> tuple[int, int]:
         row = self._con.execute(f"SELECT MIN({col}), MAX({col}) FROM graphs").fetchone()
         if row is None:

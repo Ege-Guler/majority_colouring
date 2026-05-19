@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import gc
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import plotly.express as px
@@ -30,35 +32,144 @@ st.set_page_config(
 )
 
 
+EXPECTED_COLS = {
+    "mask", "num_edges", "chromatic_number", "is_isomorphic",
+    "is_cyclic", "connectivity_number", "stability_number",
+    "clique_number", "has_hamiltonian_path",
+}
+
+
 @st.cache_resource(show_spinner=False)
-def _open_dataset(csv_path: str, parquet_present: bool) -> GraphDataset:
-    # parquet_present is part of the key so we get a fresh handle after materialization
+def _open_dataset(csv_path: str, n_vertices: int, parquet_present: bool) -> GraphDataset:
+    # parquet_present in signature so the cache key changes after materialisation
     del parquet_present
-    info = next(
-        i for i in discover_datasets(NOTEBOOKS_DIR) if str(i.path) == csv_path
-    )
+    p = Path(csv_path)
+    info = DatasetInfo(path=p, n_vertices=n_vertices,
+                       size_bytes=p.stat().st_size if p.exists() else 0)
     return GraphDataset(info)
 
 
 def get_dataset(info: DatasetInfo) -> GraphDataset:
-    return _open_dataset(str(info.path), info.parquet_path.exists())
+    return _open_dataset(str(info.path), info.n_vertices, info.parquet_path.exists())
+
+
+def _validate_csv_columns(path: Path) -> list[str]:
+    """Return list of missing column names; empty list means OK."""
+    try:
+        with open(path, "r") as f:
+            header = f.readline().strip().lower()
+        cols = {c.strip() for c in header.split(",")}
+        return sorted(EXPECTED_COLS - cols)
+    except Exception:
+        return list(EXPECTED_COLS)
+
+
+def _save_upload(uploaded_file) -> Path:
+    """
+    Write an st.UploadedFile to a stable temp path and return it.
+    Re-uses the same temp file if the same upload is still active
+    (detected by name + size), deleting the old one on replacement.
+    """
+    uid = f"{uploaded_file.name}_{uploaded_file.size}"
+    prev_uid  = st.session_state.get("_upload_uid")
+    prev_path = st.session_state.get("_upload_path")
+
+    if prev_uid == uid and prev_path and Path(prev_path).exists():
+        return Path(prev_path)
+
+    # Remove stale temp file
+    if prev_path:
+        try:
+            os.unlink(prev_path)
+        except OSError:
+            pass
+
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, suffix=".csv", prefix="majority_upload_"
+    )
+    tmp.write(uploaded_file.getvalue())
+    tmp.close()
+
+    st.session_state["_upload_uid"]  = uid
+    st.session_state["_upload_path"] = tmp.name
+    return Path(tmp.name)
 
 
 # ---------- sidebar ----------
 
 datasets = discover_datasets(NOTEBOOKS_DIR)
-if not datasets:
-    st.error(f"No results_*vertex.csv files found in {NOTEBOOKS_DIR}.")
-    st.stop()
 
 st.sidebar.title("Dataset")
-labels = [d.label for d in datasets]
-default_idx = next((i for i, d in enumerate(datasets) if d.n_vertices == 5), 0)
-chosen_label = st.sidebar.radio("Choose vertex count", labels, index=default_idx)
-info = datasets[labels.index(chosen_label)]
+
+# --- Built-in CSVs ---
+custom_info: DatasetInfo | None = None
+
+if datasets:
+    labels = [d.label for d in datasets]
+    default_idx = next((i for i, d in enumerate(datasets) if d.n_vertices == 5), 0)
+    chosen_label = st.sidebar.radio("Enumerated results", labels, index=default_idx)
+    builtin_info = datasets[labels.index(chosen_label)]
+else:
+    builtin_info = None
+    st.sidebar.caption("No results_*vertex.csv found in notebooks/")
+
+# --- Custom CSV upload ---
+st.sidebar.divider()
+with st.sidebar.expander("Custom CSV", expanded=False):
+    st.caption(
+        "Upload any CSV with the same columns as the enumeration results "
+        "(e.g. output of `tools/scrape_colorable`). "
+        "For files larger than Streamlit's upload limit (~200 MB), "
+        "paste the full file path instead."
+    )
+    uploaded = st.file_uploader("Upload CSV file", type=["csv"], label_visibility="collapsed")
+    local_path_str = st.text_input(
+        "Or enter local file path",
+        placeholder="/path/to/results_6vertex_odd_only.csv",
+    )
+    n_custom = st.selectbox(
+        "Vertex count N (needed to decode masks)",
+        options=[3, 4, 5, 6, 7, 8],
+        index=1,
+        help="Number of vertices in the graphs stored in this CSV.",
+    )
+
+    if uploaded is not None:
+        csv_path = _save_upload(uploaded)
+        missing = _validate_csv_columns(csv_path)
+        if missing:
+            st.error(f"Missing columns: {', '.join(missing)}")
+        else:
+            custom_info = DatasetInfo(
+                path=csv_path, n_vertices=n_custom, size_bytes=uploaded.size
+            )
+            st.success(f"Loaded: {uploaded.name}")
+    elif local_path_str.strip():
+        lp = Path(local_path_str.strip())
+        if not lp.exists():
+            st.error("File not found.")
+        else:
+            missing = _validate_csv_columns(lp)
+            if missing:
+                st.error(f"Missing columns: {', '.join(missing)}")
+            else:
+                custom_info = DatasetInfo(
+                    path=lp, n_vertices=n_custom, size_bytes=lp.stat().st_size
+                )
+                st.success(f"Loaded: {lp.name}")
+
+# Active dataset: custom upload takes precedence
+if custom_info is not None:
+    info = custom_info
+elif builtin_info is not None:
+    info = builtin_info
+else:
+    st.error("No dataset available. Upload a CSV or add results CSVs to notebooks/.")
+    st.stop()
 
 ds = get_dataset(info)
 
+st.sidebar.divider()
 source_kind = "Parquet cache" if ds.using_parquet() else "CSV (streamed)"
 st.sidebar.caption(f"Source: **{source_kind}**")
 st.sidebar.caption(f"Memory cap: {GraphDataset.MEMORY_LIMIT}, threads: {GraphDataset.THREADS}")
@@ -78,7 +189,6 @@ with st.sidebar.expander("Performance"):
     else:
         st.caption(f"Parquet: {info.parquet_path.name}")
 
-st.sidebar.divider()
 st.sidebar.markdown(
     "Graph images are rendered **on demand** and dropped from memory after display. "
     "Nothing is written to disk."
