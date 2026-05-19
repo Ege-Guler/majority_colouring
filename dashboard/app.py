@@ -24,6 +24,7 @@ from data_access import (
 from visualize import render_graph
 
 NOTEBOOKS_DIR = DASHBOARD_DIR.parent / "notebooks"
+RESULTS_DIR   = DASHBOARD_DIR.parent / "results"
 
 st.set_page_config(
     page_title="Majority Colouring — Graph Dashboard",
@@ -97,7 +98,7 @@ def _save_upload(uploaded_file) -> Path:
 
 # ---------- sidebar ----------
 
-datasets = discover_datasets(NOTEBOOKS_DIR)
+datasets = [*discover_datasets(NOTEBOOKS_DIR), *discover_datasets(RESULTS_DIR)]
 
 st.sidebar.title("Dataset")
 

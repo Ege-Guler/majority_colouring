@@ -9,7 +9,7 @@ Modular/Optimized Version:
   - Bitmask-based sharded caching.
 
 Usage:
-    julia --project -t auto notebooks/enumerate_graphs.jl [N]
+    julia --project -t auto julia/enumerate_graphs.jl [N]
 
 Output:
     results_[N]vertex.csv
@@ -174,11 +174,12 @@ function cache_result!(cmask::UInt64, res)
 end
 
 # --- Setup output paths ---
-notebooks_dir = @__DIR__
-output_csv    = FILTER_ODD_CYCLES ?
-    joinpath(notebooks_dir, "results_$(VERTICES)vertex_odd_only.csv") :
-    joinpath(notebooks_dir, "results_$(VERTICES)vertex.csv")
-vis_dir       = joinpath(notebooks_dir, "visualizations")
+results_dir = joinpath(@__DIR__, "..", "results")
+mkpath(results_dir)
+output_csv  = FILTER_ODD_CYCLES ?
+    joinpath(results_dir, "results_$(VERTICES)vertex_odd_only.csv") :
+    joinpath(results_dir, "results_$(VERTICES)vertex.csv")
+vis_dir     = joinpath(results_dir, "visualizations")
 mkpath(vis_dir)
 
 # --- Timing & Statistics ---
