@@ -35,3 +35,9 @@ notebooks/visualizations/
 .venv/
 
 *.csv
+*.parquet
+*.pyc
+*.docx
+
+scrape_colorable
+scrape_colorable_debug
