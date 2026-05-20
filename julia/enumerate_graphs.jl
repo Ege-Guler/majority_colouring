@@ -1,4 +1,7 @@
 """
+
+Producer → [mask_chan] → Workers (parallel) → [results_chan] → Writer
+
 Enumerate all weakly connected directed graphs on N vertices and compute the minimum
 number of colors required under the majority coloring rule.
 
@@ -13,25 +16,97 @@ Usage:
 
 Output:
     results_[N]vertex.csv
+
+HOW THE MAIN ENUMERATION WORKS
+===============================
+
+ARCHITECTURE
+  Three concurrent actors communicate via buffered channels:
+    Producer (main thread) — puts every integer mask 0..2^E-1 into mask_chan.
+    Workers (one per Julia thread) — read masks, compute results, push to results_chan.
+    Writer (@async task) — reads results_chan and writes rows to the CSV.
+
+PER-MASK FLOW INSIDE EACH WORKER
+  1. Canonical mask / isomorphism check
+       cmask = get_canonical_mask(mask)
+     Every graph is a bitmask over all possible edges. get_canonical_mask applies all N!
+     vertex permutations and takes the minimum resulting mask. Two isomorphic graphs always
+     produce the same cmask, so the cache key is isomorphism-invariant.
+     The permutation maps (PERM_MAPS) are precomputed once at startup to avoid recomputing
+     N! permutations for every graph.
+
+  2. Sharded cache lookup
+       cache_status, cached_res = get_or_claim_cached_result(cmask)
+     There are 256 shards, each guarded by its own ReentrantLock (shard = cmask % 256).
+     This avoids a single global lock bottleneck across threads. Three outcomes:
+       :hit     — another thread already solved this canonical graph; reuse the result.
+       :claimed — we are first; compute it ourselves, then store it.
+       :pending — another thread is mid-computation; yield() and retry.
+
+  3. Cache hit path
+     Emit the cached result with iso=true (marks it as an isomorphic copy in the CSV).
+     Disconnected graphs get chromatic=-1 and are skipped entirely.
+
+  4. Weakly-connected check (cache miss only)
+     If the graph is not weakly connected, immediately cache (-1,...) and output a skip
+     row — no further work is done for this mask.
+
+  5. Odd cycle filter (cache miss, --filter-odd-cycles flag only)
+     has_directed_odd_cycle(G) checks each strongly connected component: if the underlying
+     undirected graph of any SCC is non-bipartite, a directed odd cycle exists.
+     Graphs with NO directed odd cycle are provably majority 2-colourable (arXiv:1911.01954
+     Prop 1), so they are cached and omitted from the CSV — Gurobi is never called for them.
+
+  6. Property computation (cache miss, connected graphs only)
+     Computed in one timed block:
+       is_cyclic                  — has any directed cycle
+       compute_vertex_connectivity — brute-force over all vertex-removal subsets
+       compute_independence_number — brute-force over all vertex subsets
+       compute_clique_number       — brute-force over all vertex subsets
+       has_hamiltonian_path        — DFS from every start vertex
+
+  7. Gurobi solve
+       solve_majority_coloring_out(G, env; strengthen_y=true, symmetry_break=true)
+     Called with a thread-local Gurobi environment (each worker owns its own env).
+     Has a retry loop (up to 3 attempts, 2 s sleep between) for license/network errors.
+     sum(y_val) of the returned binary vector gives the chromatic number.
+
+  8. Cache write and emit
+     Result is stored in the shard cache so all isomorphic copies processed later take
+     the :hit path instead of re-solving.
+
+WHAT IS CACHED VS RECOMPUTED PER ISOMORPHIC COPY
+  Cache miss (first encounter): graph decoded, all properties computed, Gurobi run.
+  Cache hit  (isomorphic copy): everything reused from cache; only canonical mask recomputed.
 """
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-using JuMP, Gurobi, Graphs
+using JuMP, HiGHS, Graphs
 using GraphPlot, Colors, Compose, Cairo
 using Base.Threads
 using Combinatorics
 
 # --- Modular Vertices Setup ---
-const VERTICES           = parse(Int, get(ARGS, 1, "5"))
-const ALL_EDGES          = [(i, j) for i in 1:VERTICES for j in 1:VERTICES if i != j]
+# Arguments:
+const VERTICES           = parse(Int, get(ARGS, 1, "5")) # N from command line, default 5
+const ALL_EDGES          = [(i, j) for i in 1:VERTICES for j in 1:VERTICES if i != j] # all possible directed edges (excluding self-loops)
 const NUM_EDGES          = length(ALL_EDGES)
-const TOTAL_MASKS        = 2^NUM_EDGES
+const TOTAL_MASKS        = 2^NUM_EDGES # total number of directed graphs on N vertices
 const FILTER_ODD_CYCLES  = "--filter-odd-cycles" in ARGS
 
 include("solve_majority_coloring_out.jl")
 
+"""
+Every possible directed graph on N vertices can be encoded as a bitmask, 
+where each bit corresponds to one possible edge. This function decodes that 
+integer back into an actual graph.
+
+For N=3: [(1,2), (1,3), (2,1), (2,3), (3,1), (3,2)]
+        bit 0   bit 1   bit 2   bit 3   bit 4   bit 5
+
+"""
 function mask_to_graph(mask::Int)::SimpleDiGraph
     G = SimpleDiGraph(VERTICES)
     for (k, (i, j)) in enumerate(ALL_EDGES)
@@ -124,6 +199,26 @@ function has_hamiltonian_path(G::SimpleDiGraph)
 end
 
 # --- Fast Bitmask-Based Canonical Labeling ---
+"""
+Graph A: edges (1->2),(2->3)   mask = 9  = 0b001001
+Graph B: edges (2->3),(3->1)   mask = 18 = 0b010010  (isomorphic to A)
+
+Applying all 6 permutations to mask 9:
+  identity  [1,2,3] -> mask 9
+  rotate    [2,3,1] -> mask 18
+  rotate    [3,1,2] -> mask 36
+  ...
+
+Applying all 6 permutations to mask 18:
+  identity  [1,2,3] -> mask 18
+  rotate    [3,1,2] -> mask 9       <- same minimum!
+  ...
+
+canonical(9)  = min(9, 18, 36, ...) = 9
+canonical(18) = min(9, 18, 36, ...) = 9  same!
+"""
+
+
 const PERM_MAPS = Vector{Vector{Int}}()
 let
     println("Precomputing $VERTICES-vertex permutation maps...")
@@ -244,9 +339,9 @@ end
 worker_tasks = []
 for i in 1:nthreads()
     t = Threads.@spawn begin
-        env = Gurobi.Env()
-        Gurobi.GRBsetintparam(env, "OutputFlag", 0)
-        Gurobi.GRBsetintparam(env, "Threads", 1)
+        #env = Gurobi.Env()
+        #Gurobi.GRBsetintparam(env, "OutputFlag", 0)
+        #Gurobi.GRBsetintparam(env, "Threads", 1)
 
         for mask in mask_chan
             t_iso = @elapsed cmask = get_canonical_mask(mask)
@@ -314,7 +409,7 @@ for i in 1:nthreads()
 
                     while !success && retry_count < max_retries
                         try
-                            _, _, y_val, _ = solve_majority_coloring_out(G, env; strengthen_y=true, symmetry_break=true)
+                            _, _, y_val, _ = solve_majority_coloring_out(G; strengthen_y=true, symmetry_break=true)
                             success = true
                         catch e
                             retry_count += 1
