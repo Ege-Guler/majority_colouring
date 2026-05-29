@@ -40,9 +40,9 @@ The **majority colouring conjecture** (Kreutzer, Oum, Seymour, van der Zypen, Wo
 
 | Tool | Version | Purpose |
 |---|---|---|
-| [Julia](https://julialang.org/downloads/) | ≥ 1.9 | Graph enumeration and MILP solving |
+| [Julia](https://julialang.org/downloads/) | 1.12 | Graph enumeration and MILP solving |
 | [Gurobi](https://www.gurobi.com/downloads/) | ≥ 10 | MILP solver (free academic licence available) |
-| Python | ≥ 3.9 | Analysis scripts and dashboard |
+| Python | 3.12 | Analysis scripts and dashboard |
 
 ### Installing Julia
 
@@ -186,7 +186,7 @@ The main script is `julia/enumerate_graphs.jl`. It generates every weakly connec
 ### Basic usage
 
 ```bash
-# Default: N=5 (≈1 million graphs, ~10 minutes on a modern CPU)
+# Default: N=5 (≈1 million graphs, ~30 seconds on a modern CPU)
 julia --project -t auto julia/enumerate_graphs.jl
 
 # Explicit N
@@ -338,10 +338,10 @@ Both scripts handle the 36 GB file in 1M-row chunks and never load the full tabl
 |---|---|---|---|
 | 3 | 64 | < 1 second | 1.7 KB |
 | 4 | 4,096 | ~5 seconds | 113 KB |
-| 5 | 1,048,576 | ~10 minutes | 33 MB |
-| 6 | 1,073,741,824 | ~150+ hours | 36 GB |
+| 5 | 1,048,576 | ~30 seconds | 33 MB |
+| 6 | 1,073,741,824 | ~10 hours | 36 GB |
 
-Times assume `-t auto` on a modern multi-core CPU with Gurobi. The 6-vertex run is significantly faster with `--filter-odd-cycles` since it skips ~99% of Gurobi calls.
+Times measured with `-t 8` on an Intel Core i5-1235U (12th Gen, 6P+4E cores) with 30 GB RAM, using Gurobi. The 6-vertex run is significantly faster with `--filter-odd-cycles` since it skips ~99% of Gurobi calls.
 
 For reference, pre-computed results are available:
 - N=3, 4, 5: committed in `notebooks/`
